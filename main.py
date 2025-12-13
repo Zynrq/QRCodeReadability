@@ -4,14 +4,14 @@ import random
 import qrcode
 from pyzbar.pyzbar import decode
 from PIL import ImageDraw
+from multiprocessing import Pool, cpu_count
 
-filename = "qrcode.png"
-box_size = 3
+box_size = 4
 border = 4
-cover_percentage = 0.07
+cover_percentage = 0.17
 
 qr = qrcode.QRCode(
-    error_correction=qrcode.constants.ERROR_CORRECT_L,
+    error_correction=qrcode.constants.ERROR_CORRECT_Q,
     box_size=box_size,
     border=border
 )
@@ -33,33 +33,38 @@ for pixel in range(total_pixels):
     y2 = y1 + box_size - 1
     pixels.append((x1, y1, x2, y2))
 
-def random_coordinates():
-    while True:
-        yield random.sample(pixels, pixels_to_cover)
-
-coord_gen = random_coordinates()
-
-i = 0
-
-def print_i():
-    while True:
-        print(i)
-        time.sleep(1)
-
-thread = threading.Thread(target=print_i, daemon=True)
-thread.start()
-
-while True:
+def cover_qr(_):
     img = base_img.copy()
     draw = ImageDraw.Draw(img)
 
-    for (x1, y1, x2, y2) in next(coord_gen):
-        draw.rectangle([x1, y1, x2, y2], fill="red")
+    for rect in random.sample(pixels, pixels_to_cover):
+        draw.rectangle(rect, fill="red")
 
     result = decode(img)
     if len(result) > 0:
-        print(i)
-        img.save(filename)
-        break
+        return img
+    return None
 
-    i += 1
+if __name__ == "__main__":
+    batch_size = 100
+    attempts = 0
+
+    def print_attempts():
+        while True:
+            print(attempts)
+            time.sleep(1)
+
+    thread = threading.Thread(target=print_attempts, daemon=True)
+    thread.start()
+
+    with Pool(cpu_count()) as pool:
+        while True:
+            results = pool.map(cover_qr, range(batch_size))
+            attempts += batch_size
+
+            for img in results:
+                if img is not None:
+                    print(attempts)
+                    img.save("qrcode.png")
+                    pool.terminate()
+                    exit()
