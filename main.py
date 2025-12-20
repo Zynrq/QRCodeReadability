@@ -6,12 +6,17 @@ from pyzbar.pyzbar import decode
 from PIL import ImageDraw
 from multiprocessing import Pool, cpu_count
 
+##### variables #####
+error_correction = qrcode.constants.ERROR_CORRECT_M
+cover_percentage = 0.10
+cover_function_patterns = False
+#####################
+
 box_size = 4
 border = 4
-cover_percentage = 0.17
 
 qr = qrcode.QRCode(
-    error_correction=qrcode.constants.ERROR_CORRECT_Q,
+    error_correction=error_correction,
     box_size=box_size,
     border=border
 )
@@ -23,10 +28,29 @@ grid_size = base_img.size[0] // box_size - 2 * border
 total_pixels = grid_size * grid_size
 pixels_to_cover = int(total_pixels * cover_percentage)
 
+def is_function_pattern(x, y):
+    if x < 8 and y < 8:
+        return True
+    if x >= grid_size - 8 and y < 8:
+        return True
+    if x < 8 and y >= grid_size - 8:
+        return True
+    if grid_size - 10 < x < grid_size - 4 and grid_size - 10 < y < grid_size - 4:
+        return True
+    if x == 6:
+        return True
+    if y == 6:
+        return True
+    if x == 8 and y == grid_size - 8:
+        return True
+    return False
+
 pixels = []
 for pixel in range(total_pixels):
     x = pixel % grid_size
     y = pixel // grid_size
+    if is_function_pattern(x, y) and not cover_function_patterns:
+        continue
     x1 = (x + border) * box_size
     y1 = (y + border) * box_size
     x2 = x1 + box_size - 1
