@@ -1,15 +1,15 @@
 import os
 import random
 import qrcode
-import shutil
 import string
 from pyzbar.pyzbar import decode, ZBarSymbol
 from PIL import ImageDraw
 from multiprocessing import Pool, cpu_count
+from docx import Document
 
 ##### variables #####
-max_attempts = 100
-cover_percentage = 0.15
+max_attempts = 10
+cover_mode = "Logo" # "Random pixels" or "Logo"
 cover_function_patterns = False
 cover_format_information = False
 box_size = 4
@@ -109,7 +109,7 @@ max_bytes = {
     40: {"L":2953,"M":2331,"Q":1663,"H":1273},
 }
 
-def generate_qr(args):
+def cover_qr(args):
     level, version = args
 
     data = "jfsg.nl"
@@ -144,8 +144,6 @@ def generate_qr(args):
             return True
         if x == 8 and y == grid_size - 8:
             return True
-        if grid_size - 10 < x < grid_size - 4 and grid_size - 10 < y < grid_size - 4:
-            return True
 
         for cx in alignment_pattern_positions[version]:
             for cy in alignment_pattern_positions[version]:
@@ -176,26 +174,65 @@ def generate_qr(args):
             continue
         x1 = (x + border) * box_size
         y1 = (y + border) * box_size
-        pixels.append((x1, y1, x1 + box_size - 1, y1 + box_size - 1))
+        x2 = x1 + box_size - 1
+        y2 = y1 + box_size - 1
+        pixels.append((x1, y1, x2, y2))
 
-    pixels_to_cover = int(len(pixels) * cover_percentage)
+    if cover_mode == "Random pixels":
+        attempts = 0
+        cover_percentage = 0.01
+        readable_img = base_img.copy()
+        while True:
+            img = base_img.copy()
+            draw = ImageDraw.Draw(img)
 
-    attempts = 0
-    while attempts < max_attempts:
-        img = base_img.copy()
-        draw = ImageDraw.Draw(img)
+            for rect in random.sample(pixels, int(len(pixels) * cover_percentage)):
+                draw.rectangle(rect, fill="red")
 
-        for rect in random.sample(pixels, pixels_to_cover):
-            draw.rectangle(rect, fill="red")
+            attempts += 1
 
-        attempts += 1
+            if decode(img, symbols=[ZBarSymbol.QRCODE]):
+                attempts = 0
+                cover_percentage += 0.01
+                readable_img = img.copy()
+                continue
 
-        if decode(img, symbols=[ZBarSymbol.QRCODE]):
-            img.save(f"qrcodes/qrcode{level}{version}.png")
-            return level, version, attempts
+            if attempts >= max_attempts:
+                readable_img.save(f"qrcodes/qrcode{level}{version}.png")
+                return level, version, cover_percentage - 0.01
+    elif cover_mode == "Logo":
+        center = grid_size // 2
+        size = 1
+        cover_percentage = round((size * size) / len(pixels), 2)
+        readable_img = base_img.copy()
+        while True:
+            cover_pixels = []
+            for p in range(size * size):
+                x = p % size + center - int((size - 1) / 2)
+                y = p // size + center - int((size - 1) / 2)
+                if is_function_pattern(x, y) or is_format_information(x, y):
+                    continue
+                x1 = (x + border) * box_size
+                y1 = (y + border) * box_size
+                x2 = x1 + box_size - 1
+                y2 = y1 + box_size - 1
+                cover_pixels.append((x1, y1, x2, y2))
 
-    base_img.save(f"qrcodes/qrcode{level}{version}.png")
-    return level, version, attempts
+            img = base_img.copy()
+            draw = ImageDraw.Draw(img)
+
+            for rect in cover_pixels:
+                draw.rectangle(rect, fill="red")
+
+            if decode(img, symbols=[ZBarSymbol.QRCODE]):
+                cover_percentage = round((size * size) / len(pixels), 2)
+                size += 2
+                readable_img = img.copy()
+                continue
+            else:
+                readable_img.save(f"qrcodes/qrcode{level}{version}.png")
+                return level, version, cover_percentage
+    exit()
 
 if __name__ == "__main__":
     folder = "qrcodes"
@@ -209,9 +246,27 @@ if __name__ == "__main__":
              for level in error_correction_levels
              for version in range(1, 41)]
 
-    with Pool(int(cpu_count() / 2)) as pool:
-        for level, version, attempts in pool.imap(generate_qr, tasks, chunksize=1):
-            if attempts >= max_attempts:
-                print(f"QR {level} v{version} ❌ failed")
+    doc = Document()
+    table = doc.add_table(rows=41, cols=5)
+    table.style = "Table Grid"
+
+    headers = ["v", "L", "M", "Q", "H"]
+    for i, h in enumerate(headers):
+        table.cell(0, i).text = h
+
+    data = [[i, 0, 0, 0, 0] for i in range(1, 41)]
+
+    with Pool(max(1, cpu_count() // 2)) as pool:
+        for level, version, cover_percentage in pool.imap(cover_qr, tasks, chunksize=1):
+            data[version - 1][headers.index(level)] = cover_percentage
+            print(f"QR {level} v{version} was covered for {int(cover_percentage * 100)}%")
+
+    for version, row in enumerate(data, start=1):
+        for col, value in enumerate(row):
+            if col == 0:
+                table.cell(version, col).text = str(value)
             else:
-                print(f"QR {level} v{version} ✅ after {attempts} attempts")
+                table.cell(version, col).text = f"{int(value * 100)}%"
+
+    doc.save("qrcode_max_cover_percentages.docx")
+    print("Done")
