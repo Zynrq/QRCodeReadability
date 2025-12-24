@@ -2,6 +2,7 @@ import os
 import random
 import qrcode
 import string
+import matplotlib.pyplot as plt
 from pyzbar.pyzbar import decode, ZBarSymbol
 from PIL import ImageDraw
 from multiprocessing import Pool, cpu_count
@@ -9,7 +10,7 @@ from docx import Document
 
 ##### variables #####
 max_attempts = 10
-cover_mode = "Side" # "Pixels", "Logo" or "Side"
+cover_mode = "Bytes" # "Pixels", "Logo", "Side", "Border" or "Bytes"
 cover_color = "red"
 cover_function_patterns = False
 cover_format_information = False
@@ -18,10 +19,10 @@ border = 4
 #####################
 
 error_correction_levels = {
-    "L": qrcode.constants.ERROR_CORRECT_L,
-    "M": qrcode.constants.ERROR_CORRECT_M,
-    "Q": qrcode.constants.ERROR_CORRECT_Q,
-    "H": qrcode.constants.ERROR_CORRECT_H
+    "L": [qrcode.constants.ERROR_CORRECT_L, 0.07],
+    "M": [qrcode.constants.ERROR_CORRECT_M, 0.15],
+    "Q": [qrcode.constants.ERROR_CORRECT_Q, 0.25],
+    "H": [qrcode.constants.ERROR_CORRECT_H, 0.30]
 }
 
 alignment_pattern_positions = {
@@ -122,7 +123,7 @@ def cover_qr(args):
         )
 
     qr = qrcode.QRCode(
-        error_correction=error_correction_levels[level],
+        error_correction=error_correction_levels[level][0],
         box_size=box_size,
         border=border
     )
@@ -201,17 +202,43 @@ def cover_qr(args):
             if attempts >= max_attempts:
                 readable_img.save(f"qrcodes/qrcode{level}{version}.png")
                 return level, version, cover_percentage - 0.01
-    elif cover_mode == "Logo":
-        center = grid_size // 2
+
+    elif cover_mode == "Logo" or cover_mode == "Side" or cover_mode == "Border":
         size = 1
-        pixels_to_cover = size * size
-        cover_percentage = round(pixels_to_cover / len(pixels), 2)
+        pixels_to_cover = 0
+        if cover_mode == "Logo":
+            pixels_to_cover = size * size
+        elif cover_mode == "Side":
+            pixels_to_cover = size * (size + 1) // 2
+        elif cover_mode == "Border":
+            pixels_to_cover = 4 * size * (grid_size - size)
+        cover_percentage = pixels_to_cover / len(pixels)
         readable_img = base_img.copy()
+        max_cover = 0
         while True:
             cover_pixels = []
             for p in range(pixels_to_cover):
-                x = p % size + center - (size - 1) // 2
-                y = p // size + center - (size - 1) // 2
+                x = 0
+                y = 0
+                if cover_mode == "Logo":
+                    x = p % size + (grid_size - size + 1) // 2
+                    y = p // size + (grid_size - size + 1) // 2
+                elif cover_mode == "Side":
+                    y = int(((8 * p + 1) ** 0.5 - 1) // 2)
+                    x = size - 1 - y + p - y * (y + 1) // 2 + grid_size - size
+                    y += grid_size - size
+                elif cover_mode == "Border":
+                    if p < grid_size * size:
+                        x = p % grid_size
+                        y = p // grid_size
+                    elif grid_size * size <= p < pixels_to_cover - grid_size * size:
+                        x = p - grid_size * size - (2 * size) * ((p - grid_size * size) // (2 * size))
+                        if (p - grid_size * size) % (2 * size) >= size:
+                            x += grid_size - 2 * size
+                        y = size + (p - grid_size * size) // (2 * size)
+                    else:
+                        x = (grid_size - (pixels_to_cover - p)) % grid_size
+                        y = (grid_size - (pixels_to_cover - p)) // grid_size + grid_size - 1
                 if is_function_pattern(x, y) or is_format_information(x, y):
                     continue
                 x1 = (x + border) * box_size
@@ -226,49 +253,75 @@ def cover_qr(args):
             for rect in cover_pixels:
                 draw.rectangle(rect, fill=cover_color)
 
+            cover_percentage = len(cover_pixels) / len(pixels)
+
             if decode(img, symbols=[ZBarSymbol.QRCODE]):
+                readable_img = img.copy()
+                max_cover = cover_percentage
+            elif cover_percentage >= error_correction_levels[level][1] + 0.05:
+                readable_img.save(f"qrcodes/qrcode{level}{version}.png")
+                return level, version, max_cover
+
+            if cover_mode == "Logo":
                 size += 2
                 pixels_to_cover = size * size
-                cover_percentage = round(len(cover_pixels) / len(pixels), 2)
-                readable_img = img.copy()
-                continue
-            else:
-                readable_img.save(f"qrcodes/qrcode{level}{version}.png")
-                return level, version, cover_percentage
-    elif cover_mode == "Side":
-        size = 1
-        pixels_to_cover = size * (size + 1) // 2
-        cover_percentage = round(pixels_to_cover / len(pixels), 2)
-        readable_img = base_img.copy()
-        while True:
-            cover_pixels = []
-            for p in range(pixels_to_cover):
-                y = int(((8 * p + 1) ** 0.5 - 1) // 2)
-                x = size - 1 - y + p - y * (y + 1) // 2 + grid_size - size
-                y += grid_size - size
-                if is_function_pattern(x, y) or is_format_information(x, y):
-                    continue
-                x1 = (x + border) * box_size
-                y1 = (y + border) * box_size
-                x2 = x1 + box_size - 1
-                y2 = y1 + box_size - 1
-                cover_pixels.append((x1, y1, x2, y2))
-            img = base_img.copy()
-            draw = ImageDraw.Draw(img)
-
-            for rect in cover_pixels:
-                draw.rectangle(rect, fill=cover_color)
-
-            if decode(img, symbols=[ZBarSymbol.QRCODE]):
+            elif cover_mode == "Side":
                 size += 1
                 pixels_to_cover = size * (size + 1) // 2
-                cover_percentage = round(len(cover_pixels) / len(pixels), 2)
-                readable_img = img.copy()
+            elif cover_mode == "Border":
+                size += 1
+                pixels_to_cover = 4 * size * (grid_size - size)
+    elif cover_mode == "Bytes":
+        attempts = 0
+        bytes_to_cover = 1
+        readable_img = base_img.copy()
+        max_cover = 0
+        qr_bytes = []
+        byte = []
+        for p in range(grid_size * (grid_size - 1) + 8):
+            x = (grid_size - 1) - p // (2 * grid_size) * 2 - (p % 2)
+            y = p % (2 * grid_size) // 2
+            if x <= 6:
+                x -= 1
+            if p // (grid_size * 2) % 2 == 0:
+                y = grid_size - 1 - y
+            if is_function_pattern(x, y) or is_format_information(x, y):
                 continue
-            else:
+            x1 = (x + border) * box_size
+            y1 = (y + border) * box_size
+            x2 = x1 + box_size - 1
+            y2 = y1 + box_size - 1
+            byte.append((x1, y1, x2, y2))
+            if len(byte) == 8:
+                qr_bytes.append(byte)
+                byte = []
+
+        while True:
+            img = base_img.copy()
+            draw = ImageDraw.Draw(img)
+            random_bytes = random.sample(qr_bytes, bytes_to_cover)
+            random_bits = []
+            for byte in random_bytes:
+                for bit in byte:
+                    random_bits.append(bit)
+
+            for rect in random_bits:
+                draw.rectangle(rect, fill=cover_color)
+
+            attempts += 1
+
+            if decode(img, symbols=[ZBarSymbol.QRCODE]):
+                attempts = 0
+                bytes_to_cover += 1
+                readable_img = img.copy()
+                max_cover = len(random_bits) / len(pixels)
+                continue
+
+            if attempts >= max_attempts:
                 readable_img.save(f"qrcodes/qrcode{level}{version}.png")
-                return level, version, cover_percentage
-    exit()
+                return level, version, max_cover
+
+    return level, version, 0
 
 if __name__ == "__main__":
     folder = "qrcodes"
@@ -297,6 +350,31 @@ if __name__ == "__main__":
             data[version - 1][headers.index(level)] = cover_percentage
             print(f"QR {level} v{version} was covered for {int(cover_percentage * 100)}%")
 
+    versions = [row[0] for row in data]
+    L_vals = [row[1] * 100 for row in data]
+    M_vals = [row[2] * 100 for row in data]
+    Q_vals = [row[3] * 100 for row in data]
+    H_vals = [row[4] * 100 for row in data]
+
+    plt.figure(figsize=(10, 6))
+
+    plt.plot(versions, L_vals, label="L")
+    plt.plot(versions, M_vals, label="M")
+    plt.plot(versions, Q_vals, label="Q")
+    plt.plot(versions, H_vals, label="H")
+
+    plt.xlabel("QR Version")
+    plt.ylabel("Max covered area (%)")
+    plt.title("Maximum QR code coverage per version")
+    plt.ylim(0, 100)
+
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig("qrcode_coverage_graph.png", dpi=300)
+    plt.show()
+
     for version, row in enumerate(data, start=1):
         for col, value in enumerate(row):
             if col == 0:
@@ -304,5 +382,5 @@ if __name__ == "__main__":
             else:
                 table.cell(version, col).text = f"{int(value * 100)}%"
 
-    doc.save("qrcode_max_cover_percentages.docx")
+    doc.save("qrcode_coverage_table.docx")
     print("Done")
