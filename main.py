@@ -8,16 +8,12 @@ from PIL import ImageDraw
 from multiprocessing import Pool, cpu_count
 from docx import Document
 
-##### variables #####
-max_attempts = 10
-cover_mode = "Bytes" # "Pixels", "Logo", "Side", "Border" or "Bytes"
+cover_mode = "Pixels" # choose between "Pixels", "Logo", "Side", "Border" and "Bytes"
+max_attempts = 1000 # only for cover modes "Pixels" and "Bytes"
+
 cover_color = "red"
-cover_function_patterns = False
-cover_format_information = False
-cover_version_info = False
 box_size = 4
 border = 4
-#####################
 
 error_correction_levels = {
     "L": [qrcode.constants.ERROR_CORRECT_L, 0.07],
@@ -116,11 +112,11 @@ def cover_qr(args):
     level, version = args
 
     data = "jfsg.nl"
-    total_bytes = max_bytes[version][level]
-    if total_bytes > len(data):
+    data_bytes = max_bytes[version][level]
+    if data_bytes > len(data):
         data += "/" + "".join(
             random.choice(string.ascii_letters + string.digits)
-            for _ in range(total_bytes - len(data) - 1)
+            for _ in range(data_bytes - len(data) - 1)
         )
 
     qr = qrcode.QRCode(
@@ -135,8 +131,6 @@ def cover_qr(args):
     total_pixels = grid_size * grid_size
 
     def is_function_pattern(x, y):
-        if cover_function_patterns:
-            return False
         if x < 8 and y < 8:
             return True
         if x >= grid_size - 8 and y < 8:
@@ -157,8 +151,6 @@ def cover_qr(args):
         return False
 
     def is_format_information(x, y):
-        if cover_format_information:
-            return False
         if x == 8 and (y < 6 or y == 7):
             return True
         if (x < 6 or 7 <= x <= 8) and y == 8:
@@ -170,7 +162,7 @@ def cover_qr(args):
         return False
 
     def is_version_info(x, y):
-        if cover_version_info or version < 7:
+        if version < 7:
             return False
         if grid_size - 11 <= x <= grid_size - 9 and y < 6:
             return True
@@ -178,27 +170,48 @@ def cover_qr(args):
             return True
         return False
 
-    pixels = []
-    for p in range(total_pixels):
-        x = p % grid_size
-        y = p // grid_size
+    qr_bytes = []
+    byte = []
+    for p in range(grid_size * (grid_size - 1) + 8):
+        x = (grid_size - 1) - p // (2 * grid_size) * 2 - (p % 2)
+        y = p % (2 * grid_size) // 2
+        if x <= 6:
+            x -= 1
+        if p // (grid_size * 2) % 2 == 0:
+            y = grid_size - 1 - y
         if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
             continue
         x1 = (x + border) * box_size
         y1 = (y + border) * box_size
         x2 = x1 + box_size - 1
         y2 = y1 + box_size - 1
-        pixels.append((x1, y1, x2, y2))
+        byte.append((x1, y1, x2, y2))
+        if len(byte) == 8:
+            qr_bytes.append(byte)
+            byte = []
 
     if cover_mode == "Pixels":
         attempts = 0
         cover_percentage = 0.01
         readable_img = base_img.copy()
+
+        cover_pixels = []
+        for p in range(total_pixels):
+            x = p % grid_size
+            y = p // grid_size
+            if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
+                continue
+            x1 = (x + border) * box_size
+            y1 = (y + border) * box_size
+            x2 = x1 + box_size - 1
+            y2 = y1 + box_size - 1
+            cover_pixels.append((x1, y1, x2, y2))
+
         while True:
             img = base_img.copy()
             draw = ImageDraw.Draw(img)
 
-            for rect in random.sample(pixels, int(len(pixels) * cover_percentage)):
+            for rect in random.sample(cover_pixels, int(len(qr_bytes) * 8 * cover_percentage)):
                 draw.rectangle(rect, fill=cover_color)
 
             attempts += 1
@@ -222,10 +235,12 @@ def cover_qr(args):
             pixels_to_cover = size * (size + 1) // 2
         elif cover_mode == "Border":
             pixels_to_cover = 4 * size * (grid_size - size)
-        cover_percentage = pixels_to_cover / len(pixels)
+        cover_percentage = 0
         readable_img = base_img.copy()
         max_cover = 0
+
         while True:
+            covered_modules = 0
             cover_pixels = []
             for p in range(pixels_to_cover):
                 x = 0
@@ -249,13 +264,14 @@ def cover_qr(args):
                     else:
                         x = (grid_size - (pixels_to_cover - p)) % grid_size
                         y = (grid_size - (pixels_to_cover - p)) // grid_size + grid_size - 1
-                if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
-                    continue
                 x1 = (x + border) * box_size
                 y1 = (y + border) * box_size
                 x2 = x1 + box_size - 1
                 y2 = y1 + box_size - 1
                 cover_pixels.append((x1, y1, x2, y2))
+                if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
+                    continue
+                covered_modules += 1
 
             img = base_img.copy()
             draw = ImageDraw.Draw(img)
@@ -263,7 +279,7 @@ def cover_qr(args):
             for rect in cover_pixels:
                 draw.rectangle(rect, fill=cover_color)
 
-            cover_percentage = len(cover_pixels) / len(pixels)
+            cover_percentage = covered_modules / (len(qr_bytes) * 8)
 
             if decode(img, symbols=[ZBarSymbol.QRCODE]):
                 readable_img = img.copy()
@@ -281,30 +297,12 @@ def cover_qr(args):
             elif cover_mode == "Border":
                 size += 1
                 pixels_to_cover = 4 * size * (grid_size - size)
+
     elif cover_mode == "Bytes":
         attempts = 0
         bytes_to_cover = 1
         readable_img = base_img.copy()
         max_cover = 0
-        qr_bytes = []
-        byte = []
-        for p in range(grid_size * (grid_size - 1) + 8):
-            x = (grid_size - 1) - p // (2 * grid_size) * 2 - (p % 2)
-            y = p % (2 * grid_size) // 2
-            if x <= 6:
-                x -= 1
-            if p // (grid_size * 2) % 2 == 0:
-                y = grid_size - 1 - y
-            if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
-                continue
-            x1 = (x + border) * box_size
-            y1 = (y + border) * box_size
-            x2 = x1 + box_size - 1
-            y2 = y1 + box_size - 1
-            byte.append((x1, y1, x2, y2))
-            if len(byte) == 8:
-                qr_bytes.append(byte)
-                byte = []
 
         while True:
             img = base_img.copy()
@@ -324,7 +322,7 @@ def cover_qr(args):
                 attempts = 0
                 bytes_to_cover += 1
                 readable_img = img.copy()
-                max_cover = len(random_bits) / len(pixels)
+                max_cover = len(random_bytes) / len(qr_bytes)
                 continue
 
             if attempts >= max_attempts:
@@ -374,7 +372,7 @@ if __name__ == "__main__":
     plt.plot(versions, H_vals, label="H")
 
     plt.xlabel("Versie QR-code (1-40)")
-    plt.ylabel("Maximaal percentage afgedekte databits (%)")
+    plt.ylabel("Maximaal percentage afgedekte bits (%)")
     plt.title("Maximale afdekking per versie QR-code")
     plt.ylim(0, 100)
 
