@@ -14,6 +14,7 @@ cover_mode = "Bytes" # "Pixels", "Logo", "Side", "Border" or "Bytes"
 cover_color = "red"
 cover_function_patterns = False
 cover_format_information = False
+cover_version_info = False
 box_size = 4
 border = 4
 #####################
@@ -168,11 +169,20 @@ def cover_qr(args):
             return True
         return False
 
+    def is_version_info(x, y):
+        if cover_version_info or version < 7:
+            return False
+        if grid_size - 11 <= x <= grid_size - 9 and y < 6:
+            return True
+        if x < 6 and grid_size - 11 <= y <= grid_size - 9:
+            return True
+        return False
+
     pixels = []
     for p in range(total_pixels):
         x = p % grid_size
         y = p // grid_size
-        if is_function_pattern(x, y) or is_format_information(x, y):
+        if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
             continue
         x1 = (x + border) * box_size
         y1 = (y + border) * box_size
@@ -239,7 +249,7 @@ def cover_qr(args):
                     else:
                         x = (grid_size - (pixels_to_cover - p)) % grid_size
                         y = (grid_size - (pixels_to_cover - p)) // grid_size + grid_size - 1
-                if is_function_pattern(x, y) or is_format_information(x, y):
+                if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
                     continue
                 x1 = (x + border) * box_size
                 y1 = (y + border) * box_size
@@ -285,7 +295,7 @@ def cover_qr(args):
                 x -= 1
             if p // (grid_size * 2) % 2 == 0:
                 y = grid_size - 1 - y
-            if is_function_pattern(x, y) or is_format_information(x, y):
+            if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
                 continue
             x1 = (x + border) * box_size
             y1 = (y + border) * box_size
@@ -363,9 +373,9 @@ if __name__ == "__main__":
     plt.plot(versions, Q_vals, label="Q")
     plt.plot(versions, H_vals, label="H")
 
-    plt.xlabel("QR Version")
-    plt.ylabel("Max covered area (%)")
-    plt.title("Maximum QR code coverage per version")
+    plt.xlabel("Versie QR-code (1-40)")
+    plt.ylabel("Maximaal percentage afgedekte databits (%)")
+    plt.title("Maximale afdekking per versie QR-code")
     plt.ylim(0, 100)
 
     plt.grid(True)
