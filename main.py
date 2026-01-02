@@ -8,7 +8,7 @@ from PIL import ImageDraw
 from multiprocessing import Pool, cpu_count
 from docx import Document
 
-cover_mode = "Maximum" # choose between "RandomBits", "Logo", "Side", "Border", "RandomBytes", "BytesInOrder" and "Maximum"
+cover_mode = "Logo" # choose between "RandomBits", "Logo", "Side", "Border", "RandomBytes", "BytesInOrder" and "Maximum"
 max_attempts = 1000 # only for cover modes "RandomBits" and "RandomBytes"
 
 cover_color = "red"
@@ -126,6 +126,7 @@ def cover_qr(args):
     )
     qr.add_data(data)
     base_img = qr.make_image().convert("RGB")
+    filename = f"{cover_mode}/qrcodes/qrcode{level}{version}.png"
 
     grid_size = base_img.size[0] // box_size - 2 * border
     total_pixels = grid_size * grid_size
@@ -223,7 +224,7 @@ def cover_qr(args):
                 continue
 
             if attempts >= max_attempts:
-                readable_img.save(f"qrcodes/qrcode{level}{version}.png")
+                readable_img.save(filename)
                 return level, version, cover_percentage - 0.01
 
     elif cover_mode == "Logo" or cover_mode == "Side" or cover_mode == "Border":
@@ -285,7 +286,7 @@ def cover_qr(args):
                 readable_img = img.copy()
                 max_cover = cover_percentage
             elif cover_percentage >= error_correction_levels[level][1] + 0.05:
-                readable_img.save(f"qrcodes/qrcode{level}{version}.png")
+                readable_img.save(filename)
                 return level, version, max_cover
 
             if cover_mode == "Logo":
@@ -307,6 +308,7 @@ def cover_qr(args):
         while True:
             img = base_img.copy()
             draw = ImageDraw.Draw(img)
+
             random_bytes = random.sample(qr_bytes, bytes_to_cover)
             random_bits = []
             for byte in random_bytes:
@@ -326,11 +328,31 @@ def cover_qr(args):
                 continue
 
             if attempts >= max_attempts:
-                readable_img.save(f"qrcodes/qrcode{level}{version}.png")
+                readable_img.save(filename)
                 return level, version, max_cover
 
     elif cover_mode == "BytesInOrder":
-        pass
+        bytes_to_cover = 1
+        readable_img = base_img.copy()
+
+        while True:
+            img = base_img.copy()
+            draw = ImageDraw.Draw(img)
+
+            random_bits = []
+            for byte in qr_bytes[:bytes_to_cover]:
+                for bit in byte:
+                    random_bits.append(bit)
+
+            for rect in random_bits:
+                draw.rectangle(rect, fill=cover_color)
+
+            if decode(img, symbols=[ZBarSymbol.QRCODE]):
+                bytes_to_cover += 1
+                readable_img = img.copy()
+            else:
+                readable_img.save(filename)
+                return level, version, (bytes_to_cover - 1) / len(qr_bytes)
 
     elif cover_mode == "Maximum":
         total_bytes = len(qr_bytes)
@@ -342,12 +364,18 @@ def cover_qr(args):
     return level, version, 0
 
 if __name__ == "__main__":
-    folder = "qrcodes"
+    if os.path.exists(cover_mode):
+        for f in os.listdir(cover_mode):
+            os.remove(os.path.join(cover_mode, f))
+
+    os.makedirs(cover_mode, exist_ok=True)
+
+    folder = f"{cover_mode}/qrcodes"
     if os.path.exists(folder):
         for f in os.listdir(folder):
             os.remove(os.path.join(folder, f))
 
-    os.makedirs("qrcodes", exist_ok=True)
+    os.makedirs(folder, exist_ok=True)
 
     tasks = [(level, version)
              for level in error_correction_levels
@@ -390,7 +418,7 @@ if __name__ == "__main__":
     plt.legend()
     plt.tight_layout()
 
-    plt.savefig("qrcode_coverage_graph.png", dpi=300)
+    plt.savefig(f"{cover_mode}/graph.png", dpi=300)
     plt.show()
 
     for version, row in enumerate(data, start=1):
@@ -400,5 +428,5 @@ if __name__ == "__main__":
             else:
                 table.cell(version, col).text = f"{round(value * 100)}%"
 
-    doc.save("qrcode_coverage_table.docx")
+    doc.save(f"{cover_mode}/table.docx")
     print("Done")
