@@ -8,8 +8,8 @@ from PIL import ImageDraw
 from multiprocessing import Pool, cpu_count
 from docx import Document
 
-cover_mode = "Pixels" # choose between "Pixels", "Logo", "Side", "Border" and "Bytes"
-max_attempts = 1000 # only for cover modes "Pixels" and "Bytes"
+cover_mode = "Maximum" # choose between "RandomBits", "Logo", "Side", "Border", "RandomBytes", "BytesInOrder" and "Maximum"
+max_attempts = 1000 # only for cover modes "RandomBits" and "RandomBytes"
 
 cover_color = "red"
 box_size = 4
@@ -190,7 +190,7 @@ def cover_qr(args):
             qr_bytes.append(byte)
             byte = []
 
-    if cover_mode == "Pixels":
+    if cover_mode == "RandomBits":
         attempts = 0
         cover_percentage = 0.01
         readable_img = base_img.copy()
@@ -298,7 +298,7 @@ def cover_qr(args):
                 size += 1
                 pixels_to_cover = 4 * size * (grid_size - size)
 
-    elif cover_mode == "Bytes":
+    elif cover_mode == "RandomBytes":
         attempts = 0
         bytes_to_cover = 1
         readable_img = base_img.copy()
@@ -329,6 +329,16 @@ def cover_qr(args):
                 readable_img.save(f"qrcodes/qrcode{level}{version}.png")
                 return level, version, max_cover
 
+    elif cover_mode == "BytesInOrder":
+        pass
+
+    elif cover_mode == "Maximum":
+        total_bytes = len(qr_bytes)
+        data_bytes = max_bytes[version][level]
+        ecc_bytes = len(qr_bytes) - data_bytes - (2 if version <= 9 else 3)
+        error_correction = (ecc_bytes // 2) / total_bytes
+        return level, version, error_correction
+
     return level, version, 0
 
 if __name__ == "__main__":
@@ -347,7 +357,7 @@ if __name__ == "__main__":
     table = doc.add_table(rows=41, cols=5)
     table.style = "Table Grid"
 
-    headers = ["v", "L", "M", "Q", "H"]
+    headers = ["Versie", "L", "M", "Q", "H"]
     for i, h in enumerate(headers):
         table.cell(0, i).text = h
 
@@ -356,7 +366,7 @@ if __name__ == "__main__":
     with Pool(max(1, cpu_count() // 2)) as pool:
         for level, version, cover_percentage in pool.imap(cover_qr, tasks, chunksize=1):
             data[version - 1][headers.index(level)] = cover_percentage
-            print(f"QR {level} v{version} was covered for {int(cover_percentage * 100)}%")
+            print(f"QR {level} v{version} was covered for {round(cover_percentage * 100)}%")
 
     versions = [row[0] for row in data]
     L_vals = [row[1] * 100 for row in data]
@@ -388,7 +398,7 @@ if __name__ == "__main__":
             if col == 0:
                 table.cell(version, col).text = str(value)
             else:
-                table.cell(version, col).text = f"{int(value * 100)}%"
+                table.cell(version, col).text = f"{round(value * 100)}%"
 
     doc.save("qrcode_coverage_table.docx")
     print("Done")
