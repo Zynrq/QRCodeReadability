@@ -9,9 +9,9 @@ from multiprocessing import Pool, cpu_count
 from docx import Document
 
 cover_mode = "Logo" # choose between "RandomBits", "Logo", "Side", "Border", "RandomBytes", "BytesInOrder" and "Maximum"
-max_attempts = 1000 # only for cover modes "RandomBits" and "RandomBytes"
+max_attempts = 100 # only for cover modes "RandomBits" and "RandomBytes"
 
-cover_color = "red"
+cover_color = "blue"
 box_size = 4
 border = 4
 
@@ -126,10 +126,9 @@ def cover_qr(args):
     )
     qr.add_data(data)
     base_img = qr.make_image().convert("RGB")
-    filename = f"{cover_mode}/qrcodes/qrcode{level}{version}.png"
+    filename = os.path.join(cover_mode, "qrcodes", f"qrcode{level}{version}.png")
 
     grid_size = base_img.size[0] // box_size - 2 * border
-    total_pixels = grid_size * grid_size
 
     def is_function_pattern(x, y):
         if x < 8 and y < 8:
@@ -171,8 +170,7 @@ def cover_qr(args):
             return True
         return False
 
-    qr_bytes = []
-    byte = []
+    qr_bytes = [[]]
     for p in range(grid_size * (grid_size - 1) + 8):
         x = (grid_size - 1) - p // (2 * grid_size) * 2 - (p % 2)
         y = p % (2 * grid_size) // 2
@@ -186,35 +184,43 @@ def cover_qr(args):
         y1 = (y + border) * box_size
         x2 = x1 + box_size - 1
         y2 = y1 + box_size - 1
-        byte.append((x1, y1, x2, y2))
+
+        byte = qr_bytes[len(qr_bytes) - 1]
         if len(byte) == 8:
-            qr_bytes.append(byte)
-            byte = []
+            qr_bytes.append([(x1, y1, x2, y2)])
+        else:
+            byte.append((x1, y1, x2, y2))
 
     if cover_mode == "RandomBits":
         attempts = 0
-        cover_percentage = 0.01
+        cover_percentage = 0.005
         readable_img = base_img.copy()
 
-        cover_pixels = []
-        for p in range(total_pixels):
-            x = p % grid_size
-            y = p // grid_size
-            if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
-                continue
-            x1 = (x + border) * box_size
-            y1 = (y + border) * box_size
-            x2 = x1 + box_size - 1
-            y2 = y1 + box_size - 1
-            cover_pixels.append((x1, y1, x2, y2))
+        cover_bits = []
+        for byte in qr_bytes:
+            for bit in byte:
+                cover_bits.append(bit)
 
         while True:
             img = base_img.copy()
             draw = ImageDraw.Draw(img)
+            covered_bytes = []
+            for rect in random.sample(cover_bits, int(len(qr_bytes) * 8 * cover_percentage)):
+                px = img.load()
+                x1, y1, x2, y2 = rect
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
 
-            for rect in random.sample(cover_pixels, int(len(qr_bytes) * 8 * cover_percentage)):
-                draw.rectangle(rect, fill=cover_color)
-
+                r, g, b = px[cx, cy]
+                is_black = (r + g + b) == 0
+                new_color = (255, 255, 0) if is_black else (0, 0, 255)
+                draw.rectangle(rect, fill=new_color)
+                for byte in qr_bytes:
+                    for bit in byte:
+                        if rect == bit and byte not in covered_bytes:
+                            covered_bytes.append(byte)
+                if len(covered_bytes) / len(qr_bytes) >= cover_percentage:
+                    break
             attempts += 1
 
             if decode(img, symbols=[ZBarSymbol.QRCODE]):
@@ -241,7 +247,6 @@ def cover_qr(args):
         max_cover = 0
 
         while True:
-            covered_modules = 0
             cover_pixels = []
             for p in range(pixels_to_cover):
                 x = 0
@@ -270,17 +275,28 @@ def cover_qr(args):
                 x2 = x1 + box_size - 1
                 y2 = y1 + box_size - 1
                 cover_pixels.append((x1, y1, x2, y2))
-                if is_function_pattern(x, y) or is_format_information(x, y) or is_version_info(x, y):
-                    continue
-                covered_modules += 1
 
             img = base_img.copy()
             draw = ImageDraw.Draw(img)
-
+            covered_bytes = []
             for rect in cover_pixels:
-                draw.rectangle(rect, fill=cover_color)
+                px = img.load()
+                x1, y1, x2, y2 = rect
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
 
-            cover_percentage = covered_modules / (len(qr_bytes) * 8)
+                r, g, b = px[cx, cy]
+                is_black = (r + g + b) == 0
+                if (rect[0] == 80 or rect[1] == 80) and version == 1 and size == 5:
+                    print(is_black, version, rect)
+                draw.rectangle(rect, fill=cover_color)
+                if not is_black:
+                    for byte in qr_bytes:
+                        for bit in byte:
+                            if rect == bit and byte not in covered_bytes:
+                                covered_bytes.append(byte)
+
+            cover_percentage = len(covered_bytes) / len(qr_bytes)
 
             if decode(img, symbols=[ZBarSymbol.QRCODE]):
                 readable_img = img.copy()
@@ -365,17 +381,15 @@ def cover_qr(args):
 
 if __name__ == "__main__":
     if os.path.exists(cover_mode):
-        for f in os.listdir(cover_mode):
-            os.remove(os.path.join(cover_mode, f))
+        for x in os.listdir(cover_mode):
+            if os.path.isdir(os.path.join(cover_mode, x)):
+                for y in os.listdir(os.path.join(cover_mode, x)):
+                    os.remove(os.path.join(cover_mode, x, y))
+            else:
+                os.remove(os.path.join(cover_mode, x))
 
     os.makedirs(cover_mode, exist_ok=True)
-
-    folder = f"{cover_mode}/qrcodes"
-    if os.path.exists(folder):
-        for f in os.listdir(folder):
-            os.remove(os.path.join(folder, f))
-
-    os.makedirs(folder, exist_ok=True)
+    os.makedirs(os.path.join(cover_mode, "qrcodes"), exist_ok=True)
 
     tasks = [(level, version)
              for level in error_correction_levels
@@ -418,7 +432,7 @@ if __name__ == "__main__":
     plt.legend()
     plt.tight_layout()
 
-    plt.savefig(f"{cover_mode}/graph.png", dpi=300)
+    plt.savefig(os.path.join(cover_mode, "graph.png"), dpi=300)
     plt.show()
 
     for version, row in enumerate(data, start=1):
@@ -428,5 +442,5 @@ if __name__ == "__main__":
             else:
                 table.cell(version, col).text = f"{round(value * 100)}%"
 
-    doc.save(f"{cover_mode}/table.docx")
+    doc.save(os.path.join(cover_mode, "table.docx"))
     print("Done")
